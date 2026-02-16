@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3-in-1 Multi-Nib Pen Mechanism</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #f3f4f6; font-family: 'Inter', sans-serif; }
+        canvas { display: block; }
+        .controls-overlay {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255, 255, 255, 0.9);
+            padding: 20px;
+            border-radius: 16px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            width: 90%;
+            max-width: 440px;
+            backdrop-filter: blur(8px);
+            z-index: 10;
+        }
+        .view-toggle {
+            display: flex;
+            background: #e5e7eb;
+            padding: 4px;
+            border-radius: 10px;
+        }
+        .view-btn {
+            flex: 1;
+            padding: 8px;
+            text-align: center;
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: all 0.2s;
+            color: #4b5563;
+        }
+        .view-btn.active {
+            background: white;
+            color: #991b1b;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .action-row {
+            display: flex;
+            gap: 8px;
+        }
+        .btn-action {
+            flex: 1;
+            background: #1e293b;
+            color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-transform: uppercase;
+        }
+        .btn-action:hover { background: #334155; }
+        .btn-action.secondary { background: #991b1b; }
+        .btn-action.secondary:hover { background: #b91c1c; }
+        .nib-indicator {
+            display: flex;
+            justify-content: space-around;
+            gap: 10px;
+        }
+        .nib-chip {
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 700;
+            background: #e5e7eb;
+            color: #4b5563;
+            transition: all 0.3s ease;
+        }
+        .nib-chip.active {
+            background: #991b1b;
+            color: white;
+            transform: scale(1.05);
+        }
+        .info-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+        }
+        .header {
+            background: #991b1b;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 8px;
+            display: inline-block;
+            margin-bottom: 8px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="info-panel">
+        <div class="header">INTERACTIVE MULTI-NIB PEN</div>
+        <div class="text-slate-600 text-sm bg-white/80 p-3 rounded-lg shadow-sm max-w-xs">
+            1. Remove the <b>Cap</b><br>
+            2. <b>Rotate Selector</b> to swap nibs<br>
+            3. Use <b>Test Write</b> to see ink trail
+        </div>
+    </div>
+
+    <div class="controls-overlay">
+        <div class="view-toggle">
+            <div id="view-external" class="view-btn active" onclick="setView('external')">EXTERNAL</div>
+            <div id="view-internal" class="view-btn" onclick="setView('internal')">INTERNAL</div>
+        </div>
+        
+        <div class="nib-indicator">
+            <span id="chip-0" class="nib-chip active">THIN (0.3mm)</span>
+            <span id="chip-1" class="nib-chip">MEDIUM (0.7mm)</span>
+            <span id="chip-2" class="nib-chip">BOLD (1.2mm)</span>
+        </div>
+        
+        <div class="action-row">
+            <button class="btn-action" onclick="rotateNib()">Rotate Selector ⚙️</button>
+            <button class="btn-action secondary" onclick="toggleCap()">Toggle Cap 🧢</button>
+        </div>
+        <button class="btn-action" style="background: #059669;" onclick="startWriting()">Test Write ✍️</button>
+        
+        <div class="text-xs text-center text-slate-400">Drag to orbit • Scroll to zoom</div>
+    </div>
+
+    <script>
+        let scene, camera, renderer, penGroup, penBody, penTip, selectorGroup, nibHolder, inkCartridge, penCap, paper;
+        let currentRotation = 0;
+        let targetRotation = 0;
+        let nibIndex = 0;
+        let mechanismGroup;
+        let isCapOn = true;
+        let isWriting = false;
+        let writeProgress = 0;
+        let inkLines = [];
+
+        const COLORS = {
+            body: 0x7f1d1d, // Deep Burgundy
+            accents: 0xd4af37, // Brass/Gold
+            nib: 0xe5e7eb, // Steel
+            internal: 0x4b5563, // Slate rod
+            ink: 0x1e293b, // Dark ink
+            paper: 0xffffff
+        };
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xf3f4f6);
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(10, 6, 15);
+            camera.lookAt(0, 0, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.body.appendChild(renderer.domElement);
+
+            // Lights
+            scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+            const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+            sun.position.set(5, 10, 7.5);
+            scene.add(sun);
+
+            createPen();
+            createEnvironment();
+
+            window.addEventListener('resize', onWindowResize, false);
+            animate();
+        }
+
+        function createEnvironment() {
+            // Paper writing surface
+            const paperGeom = new THREE.PlaneGeometry(15, 15);
+            const paperMat = new THREE.MeshPhongMaterial({ color: COLORS.paper, side: THREE.DoubleSide });
+            paper = new THREE.Mesh(paperGeom, paperMat);
+            paper.rotation.x = -Math.PI / 2;
+            paper.position.y = -6;
+            scene.add(paper);
+
+            // Grid lines on paper
+            const grid = new THREE.GridHelper(15, 30, 0xccd1d9, 0xe5e7eb);
+            grid.position.y = -5.99;
+            scene.add(grid);
+        }
+
+        function createPen() {
+            penGroup = new THREE.Group();
+            
+            // 1. Pen Body
+            const bodyGeom = new THREE.CylinderGeometry(0.5, 0.5, 6, 32);
+            const bodyMat = new THREE.MeshPhongMaterial({ color: COLORS.body, transparent: true, opacity: 1.0, shininess: 100 });
+            penBody = new THREE.Mesh(bodyGeom, bodyMat);
+            penGroup.add(penBody);
+
+            // 2. The Tip Section
+            const tipGeom = new THREE.CylinderGeometry(0.5, 0.15, 1.5, 32);
+            const tipMat = new THREE.MeshPhongMaterial({ color: COLORS.body, transparent: true, opacity: 1.0 });
+            penTip = new THREE.Mesh(tipGeom, tipMat);
+            penTip.position.y = -3.75;
+            penGroup.add(penTip);
+
+            // 3. Ink Cartridge
+            const inkGeom = new THREE.CylinderGeometry(0.25, 0.25, 4, 12);
+            const inkMat = new THREE.MeshPhongMaterial({ color: COLORS.ink, transparent: true, opacity: 0 });
+            inkCartridge = new THREE.Mesh(inkGeom, inkMat);
+            inkCartridge.position.y = 0;
+            penGroup.add(inkCartridge);
+
+            // 4. Selector (Top)
+            const selectorGeom = new THREE.CylinderGeometry(0.52, 0.52, 1.2, 32);
+            const selectorMat = new THREE.MeshPhongMaterial({ color: COLORS.accents, shininess: 150 });
+            selectorGroup = new THREE.Mesh(selectorGeom, selectorMat);
+            selectorGroup.position.y = 3.6;
+            
+            // Add ribbing texture to the selector knob
+            for(let i=0; i<12; i++) {
+                const rib = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.0, 0.1), new THREE.MeshPhongMaterial({ color: 0xaa8a2e }));
+                const angle = (i / 12) * Math.PI * 2;
+                rib.position.set(Math.cos(angle) * 0.52, 0, Math.sin(angle) * 0.52);
+                rib.rotation.y = -angle;
+                selectorGroup.add(rib);
+            }
+
+            // 5. Cap
+            const capGeom = new THREE.CylinderGeometry(0.55, 0.55, 3, 32);
+            const capMat = new THREE.MeshPhongMaterial({ color: COLORS.body });
+            penCap = new THREE.Mesh(capGeom, capMat);
+            penCap.position.y = -4.5; // Starts closed covering the tip
+            
+            // Cap Clip
+            const clip = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2, 0.3), new THREE.MeshPhongMaterial({ color: COLORS.accents }));
+            clip.position.set(0.55, 0.5, 0);
+            penCap.add(clip);
+            penGroup.add(penCap);
+
+            // 6. Mechanism (Internal Rod and Nib Holder)
+            const rodGeom = new THREE.CylinderGeometry(0.05, 0.05, 7.5, 8);
+            const rodMat = new THREE.MeshPhongMaterial({ color: COLORS.internal });
+            const rod = new THREE.Mesh(rodGeom, rodMat);
+            
+            const holderGeom = new THREE.CylinderGeometry(0.35, 0.35, 0.2, 24);
+            const holderMat = new THREE.MeshPhongMaterial({ color: COLORS.internal });
+            nibHolder = new THREE.Mesh(holderGeom, holderMat);
+            nibHolder.position.y = -3.5; 
+            
+            const nibSpecs = [
+                { name: 'Thin', w: 0.03 },
+                { name: 'Medium', w: 0.08 },
+                { name: 'Bold', w: 0.15 }
+            ];
+
+            nibSpecs.forEach((spec, i) => {
+                const nibBase = new THREE.Group();
+                const nGeom = new THREE.ConeGeometry(spec.w + 0.05, 0.6, 4);
+                const nMat = new THREE.MeshPhongMaterial({ color: COLORS.nib, shininess: 120 });
+                const nMesh = new THREE.Mesh(nGeom, nMat);
+                nMesh.rotation.x = Math.PI;
+                nMesh.position.y = -0.4;
+                nibBase.add(nMesh);
+
+                const angle = (i / 3) * Math.PI * 2;
+                nibBase.position.set(Math.cos(angle) * 0.22, 0, Math.sin(angle) * 0.22);
+                nibHolder.add(nibBase);
+            });
+
+            mechanismGroup = new THREE.Group();
+            mechanismGroup.add(rod);
+            mechanismGroup.add(nibHolder);
+            mechanismGroup.add(selectorGroup); 
+            
+            penGroup.add(mechanismGroup);
+            penGroup.rotation.z = -Math.PI * 0.1;
+            scene.add(penGroup);
+        }
+
+        function setView(mode) {
+            const isInternal = mode === 'internal';
+            document.getElementById('view-external').classList.toggle('active', !isInternal);
+            document.getElementById('view-internal').classList.toggle('active', isInternal);
+
+            // Ease materials
+            penBody.material.opacity = isInternal ? 0.2 : 1.0;
+            penTip.material.opacity = isInternal ? 0.2 : 1.0;
+            penCap.material.opacity = isInternal ? 0.2 : 1.0;
+            inkCartridge.material.opacity = isInternal ? 0.8 : 0;
+        }
+
+        function toggleCap() {
+            isCapOn = !isCapOn;
+            const targetY = isCapOn ? -4.5 : 8; // Move cap to top side when off
+            TWEEN_SIM(penCap.position, { y: targetY }, 500);
+        }
+
+        function rotateNib() {
+            nibIndex = (nibIndex + 1) % 3;
+            targetRotation -= (Math.PI * 2) / 3;
+            document.querySelectorAll('.nib-chip').forEach(c => c.classList.remove('active'));
+            document.getElementById(`chip-${nibIndex}`).classList.add('active');
+        }
+
+        function startWriting() {
+            if (isCapOn) {
+                toggleCap();
+                setTimeout(doWriteAnimation, 600);
+            } else {
+                doWriteAnimation();
+            }
+        }
+
+        function doWriteAnimation() {
+            if (isWriting) return;
+            isWriting = true;
+            writeProgress = 0;
+            
+            // Clear previous lines
+            inkLines.forEach(l => scene.remove(l));
+            inkLines = [];
+
+            // Move pen into writing posture
+            TWEEN_SIM(penGroup.position, { y: -1.0, x: -3 }, 500);
+            TWEEN_SIM(penGroup.rotation, { z: -Math.PI * 0.25 }, 500);
+        }
+
+        // Simple linear interpolation helper for animations
+        function TWEEN_SIM(obj, targets, duration) {
+            const start = {};
+            const keys = Object.keys(targets);
+            keys.forEach(k => start[k] = obj[k]);
+            const startTime = performance.now();
+            
+            function update() {
+                const now = performance.now();
+                const progress = Math.min((now - startTime) / duration, 1);
+                // Simple ease-in-out
+                const ease = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+                keys.forEach(k => obj[k] = start[k] + (targets[k] - start[k]) * ease);
+                if (progress < 1) requestAnimationFrame(update);
+            }
+            update();
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function createInkSegment(x, z, width) {
+            const geom = new THREE.CircleGeometry(width, 12);
+            const mat = new THREE.MeshBasicMaterial({ color: COLORS.ink });
+            const segment = new THREE.Mesh(geom, mat);
+            segment.rotation.x = -Math.PI / 2;
+            segment.position.set(x, -5.98, z);
+            scene.add(segment);
+            inkLines.push(segment);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Smoothly rotate the internal mechanism
+            currentRotation += (targetRotation - currentRotation) * 0.1;
+            if (mechanismGroup) mechanismGroup.rotation.y = currentRotation;
+
+            if (isWriting) {
+                writeProgress += 0.015;
+                const x = -3 + writeProgress * 6;
+                const z = Math.sin(writeProgress * 8) * 0.8;
+                
+                // Update pen position to follow path
+                penGroup.position.x = x;
+                penGroup.position.z = z;
+
+                // Create ink trail based on selected nib width
+                const widths = [0.03, 0.08, 0.15];
+                createInkSegment(x, z, widths[nibIndex]);
+
+                if (writeProgress >= 1) {
+                    isWriting = false;
+                    // Reset pen to idle position
+                    TWEEN_SIM(penGroup.position, { y: 0, x: 0, z: 0 }, 500);
+                    TWEEN_SIM(penGroup.rotation, { z: -Math.PI * 0.1 }, 500);
+                }
+            }
+
+            // Idle camera rotation
+            if (!isWriting && !isDragging) {
+                scene.rotation.y += 0.002;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Interaction logic
+        let isDragging = false, px = 0, py = 0;
+        window.addEventListener('mousedown', () => isDragging = true);
+        window.addEventListener('mouseup', () => isDragging = false);
+        window.addEventListener('mousemove', (e) => {
+            if(isDragging && !isWriting) {
+                scene.rotation.y += (e.clientX - px) * 0.01;
+                scene.rotation.x += (e.clientY - py) * 0.01;
+            }
+            px = e.clientX; py = e.clientY;
+        });
+
+        // Start
+        window.onload = init;
+    </script>
+</body>
+</html>
